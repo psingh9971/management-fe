@@ -1,0 +1,128 @@
+:root {
+  --text: #c6c2d1;
+  --text-h: #f5f3fa;
+  --bg: #0e0b14;
+  --bg-soft: #15111d;
+  --border: #2c2537;
+  --card-bg: #1a1523;
+  --accent: #b073ff;
+  --accent-2: #ff6fc0;
+  --accent-bg: rgba(176, 115, 255, 0.12);
+  --accent-border: rgba(176, 115, 255, 0.4);
+  --shadow: rgba(0, 0, 0, 0.5) 0 10px 30px -8px, rgba(0, 0, 0, 0.35) 0 4px 10px -4px;
+
+  --header-h: 96px;
+
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+
+  font: 16px/1.55 var(--sans);
+  color-scheme: dark;
+  color: var(--text);
+  background: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+h1, h2, h3 {
+  font-family: var(--sans);
+  font-weight: 700;
+  color: var(--text-h);
+  margin: 0;
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: inherit;
+}
+
+.container {
+  width: 1180px;
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 24px;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+}
+
+.btn:active {
+  transform: scale(0.97);
+}
+
+.btn-primary {
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: var(--shadow);
+}
+
+.btn-primary:hover {
+  opacity: 0.92;
+}
+
+.btn-outline {
+  color: var(--text-h);
+  background: transparent;
+  border-color: var(--border);
+}
+
+.btn-outline:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  padding: 6px 14px;
+  border-radius: 999px;
+}
+
+section {
+  padding: 88px 0;
+}
+
+@media (max-width: 900px) {
+  section {
+    padding: 56px 0;
+  }
+}
+
+@media (max-width: 760px) {
+  :root {
+    --header-h: 76px;
+  }
+}
