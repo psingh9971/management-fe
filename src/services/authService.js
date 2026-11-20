@@ -1,28 +1,27 @@
-// Auth service — mock implementation until the backend API is ready.
-// Swap `login` for a real call (e.g. POST /api/auth/login) that returns { token, user }.
-// NOTE: demo credentials live in the frontend only for now; never ship real passwords here.
+// Auth API
+//   POST /auth/login  { username, password } -> { access_token, token_type, expires_in }
+//   GET  /auth/me     (Bearer token)         -> UserOut
+import { http } from './http'
 
-const DEMO_PASSWORD = 'demo1234'
+export function login(username, password) {
+  return http.post('/auth/login', { username, password }, { auth: false })
+}
 
-const DEMO_USERS = [
-  { id: 1, name: 'Parvinder Singh', email: 'parvinder@jpxzepto.in', role: 'Partner — Technology' },
-  { id: 2, name: 'Jaideep Singh', email: 'jaideep@jpxzepto.in', role: 'Partner — Inventory & Warehousing' },
-  { id: 3, name: 'Eklavya Dixit', email: 'eklavya@jpxzepto.in', role: 'Partner — Franchise Operations' },
-]
+export function fetchMe() {
+  return http.get('/auth/me')
+}
 
-const wait = (ms) => new Promise((r) => setTimeout(r, ms))
-
-export async function login(email, password) {
-  await wait(600)
-  const user = DEMO_USERS.find((u) => u.email === email.trim().toLowerCase())
-  if (!user || password !== DEMO_PASSWORD) {
-    throw new Error('Invalid email or password.')
+// Map the API's UserOut to the shape the UI uses.
+export function toUser(u) {
+  return {
+    id: u.id,
+    username: u.username,
+    email: u.email,
+    name: u.full_name || u.username,
+    role: u.role,
+    isSuperAdmin: !!u.is_super_admin,
+    isActive: !!u.is_active,
+    lastLoginAt: u.last_login_at,
+    createdAt: u.created_at,
   }
-  return { token: `demo-${user.id}-${Date.now()}`, user }
 }
-
-export async function logout() {
-  await wait(150)
-}
-
-export const demoHint = { email: DEMO_USERS[0].email, password: DEMO_PASSWORD }

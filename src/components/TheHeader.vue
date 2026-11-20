@@ -10,9 +10,9 @@ const menuOpen = ref(false)
 
 const close = () => (menuOpen.value = false)
 
-async function logout() {
+function logout() {
   close()
-  await auth.logout()
+  auth.logout()
   router.push('/')
 }
 </script>

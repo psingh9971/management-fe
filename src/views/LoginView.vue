@@ -2,13 +2,12 @@
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '../stores/auth'
-import { demoHint } from '../services/authService'
 
 const router = useRouter()
 const route = useRoute()
 const auth = useAuth()
 
-const email = ref('')
+const username = ref('')
 const password = ref('')
 const showPassword = ref(false)
 const loading = ref(false)
@@ -16,13 +15,13 @@ const error = ref('')
 
 async function submit() {
   error.value = ''
-  if (!email.value || !password.value) {
-    error.value = 'Please enter your email and password.'
+  if (!username.value.trim() || !password.value) {
+    error.value = 'Please enter your username and password.'
     return
   }
   loading.value = true
   try {
-    await auth.login(email.value, password.value)
+    await auth.login(username.value, password.value)
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard'
     router.replace(redirect.startsWith('/') ? redirect : '/dashboard')
   } catch (e) {
@@ -30,11 +29,6 @@ async function submit() {
   } finally {
     loading.value = false
   }
-}
-
-function fillDemo() {
-  email.value = demoHint.email
-  password.value = demoHint.password
 }
 </script>
 
@@ -46,9 +40,11 @@ function fillDemo() {
         <h1>Welcome back</h1>
         <p class="muted">Sign in to manage stores, inventory and teams.</p>
 
+        <p v-if="route.query.expired" class="info" role="status">Your session has ended. Please sign in again.</p>
+
         <label>
-          <span>Email address</span>
-          <input v-model="email" type="email" autocomplete="username" placeholder="you@jpxzepto.in" />
+          <span>Username</span>
+          <input v-model="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" />
         </label>
 
         <label>
@@ -71,11 +67,6 @@ function fillDemo() {
         <button class="btn btn-primary submit" type="submit" :disabled="loading">
           {{ loading ? 'Signing in…' : 'Sign in' }}
         </button>
-
-        <div class="demo">
-          Demo mode — no backend yet.
-          <button type="button" class="link" @click="fillDemo">Use demo account</button>
-        </div>
       </form>
     </div>
   </section>
@@ -188,20 +179,13 @@ input:focus {
   cursor: progress;
 }
 
-.demo {
-  font-size: 13px;
-  text-align: center;
-}
-
-.link {
-  background: none;
-  border: none;
-  color: var(--accent);
-  font: inherit;
-  font-weight: 700;
-  cursor: pointer;
-  padding: 0;
-  text-decoration: underline;
+.info {
+  font-size: 14px;
+  color: var(--text-h);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  border-radius: 10px;
+  padding: 10px 12px;
 }
 
 @media (max-width: 480px) {
