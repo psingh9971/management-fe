@@ -1,10 +1,14 @@
 // Salary structure API
-//   GET  /salary-structure                 -> SalaryStructureOut[]
-//   GET  /salary-structure/{structure_id}  -> SalaryStructureOut
-//   POST /salary-structure  (SalaryStructureCreate) -> SalaryStructureOut
-//   POST /employees/{employee_id}/salary-assignments  { structure_id, effective_from, monthly_gross }
-//   GET  /employees/{employee_id}/salary-assignments  (assumed — the UI hides history if it 404s/405s)
-// No update / delete endpoints yet — "Duplicate" creates a new structure from an existing one.
+//   GET    /salary-structures                 -> SalaryStructureOut[]
+//   GET    /salary-structures/{structure_id}  -> SalaryStructureOut
+//   POST   /salary-structures  (SalaryStructureIn) -> SalaryStructureOut
+//   PUT    /salary-structures/{structure_id}  (SalaryStructureIn) -> replaces structure + all components;
+//          already generated slips are unaffected
+//   DELETE /salary-structures/{structure_id}  -> 204; only structures never assigned to anyone (422 otherwise)
+//   POST   /employees/{employee_id}/salary-assignments  { structure_id, effective_from, monthly_gross }
+//   GET    /employees/{employee_id}/salary-assignments
+//   DELETE /employees/{employee_id}/salary-assignments/{assignment_id} -> 204; undoes the latest
+//          assignment and reopens the previous one
 import { http } from './http'
 
 // Enum values. calculation_type and component_type are confirmed by the API;
@@ -92,6 +96,14 @@ export async function createStructure(form) {
   return toStructure(await http.post('/salary-structures', toCreatePayload(form)))
 }
 
+export async function updateStructure(id, form) {
+  return toStructure(await http.put(`/salary-structures/${encodeURIComponent(id)}`, toCreatePayload(form)))
+}
+
+export async function deleteStructure(id) {
+  await http.delete(`/salary-structures/${encodeURIComponent(id)}`)
+}
+
 // ---------- employee assignments ----------
 export function toAssignment(a) {
   return {
@@ -113,6 +125,13 @@ export async function assignStructure(employeeId, form) {
     monthly_gross: Number(form.monthlyGross),
   })
   return res ? toAssignment(res) : null
+}
+
+// Only the latest assignment can be undone; the backend reopens the previous one.
+export async function deleteAssignment(employeeId, assignmentId) {
+  await http.delete(
+    `/employees/${encodeURIComponent(employeeId)}/salary-assignments/${encodeURIComponent(assignmentId)}`,
+  )
 }
 
 // Newest first. Returns null when the backend has no list endpoint.

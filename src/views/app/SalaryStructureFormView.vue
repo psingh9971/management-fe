@@ -14,13 +14,17 @@ import {
   PRORATION_BASES,
   SAMPLE_GROSS,
   standardTemplate,
+  updateStructure,
 } from '../../services/salaryStructureService'
 import { formatINR } from '../../utils/format'
 import { toast } from '../../stores/toast'
 
 const route = useRoute()
 const router = useRouter()
+const editId = route.params.id ? String(route.params.id) : ''
 const fromId = route.query.from ? String(route.query.from) : ''
+const sourceId = editId || fromId
+const backTo = editId ? `/payroll/structures/${editId}` : '/payroll/structures'
 
 let keySeq = 0
 const withKey = (c) => ({ ...c, _key: ++keySeq })
@@ -36,7 +40,8 @@ const errors = reactive({ name: '', components: '' })
 const rowErrors = ref({}) // { [_key]: { code, name, value, baseCode } }
 const formError = ref('')
 const saving = ref(false)
-const loading = ref(!!fromId)
+const loading = ref(!!sourceId)
+const loadError = ref('')
 
 const sampleGross = ref(SAMPLE_GROSS)
 const usesGross = computed(() => needsGross(form.components))
@@ -111,8 +116,8 @@ async function save() {
   }
   saving.value = true
   try {
-    const s = await createStructure(form)
-    toast(`${s.name} created`)
+    const s = editId ? await updateStructure(editId, form) : await createStructure(form)
+    toast(`${s.name} ${editId ? 'updated' : 'created'}`)
     router.push(`/payroll/structures/${s.id}`)
   } catch (e) {
     formError.value = e.message
@@ -122,18 +127,19 @@ async function save() {
 }
 
 onMounted(async () => {
-  if (!fromId) return
+  if (!sourceId) return
   try {
-    const s = await getStructure(fromId)
+    const s = await getStructure(sourceId)
     Object.assign(form, {
-      name: `${s.name} (copy)`,
+      name: editId ? s.name : `${s.name} (copy)`,
       description: s.description,
       prorationBasis: s.prorationBasis,
-      isActive: true,
+      isActive: editId ? s.isActive : true,
       components: s.components.map(({ id, sequence, ...c }) => withKey(c)),
     })
   } catch (e) {
-    toast(`Couldn't copy that structure: ${e.message}`, 'error')
+    if (editId) loadError.value = e.status === 404 ? 'Salary structure not found' : e.message
+    else toast(`Couldn't copy that structure: ${e.message}`, 'error')
   } finally {
     loading.value = false
   }
@@ -142,22 +148,30 @@ onMounted(async () => {
 
 <template>
   <div>
-    <RouterLink to="/payroll/structures" class="back">← Salary structures</RouterLink>
+    <RouterLink :to="backTo" class="back">← {{ editId ? 'Back to structure' : 'Salary structures' }}</RouterLink>
 
     <div class="ui-page-head">
       <div>
-        <h1>{{ fromId ? 'Duplicate structure' : 'New salary structure' }}</h1>
-        <p class="ui-muted">Amounts are for a full month; prorated components scale with paid days.</p>
+        <h1>{{ editId ? 'Edit salary structure' : fromId ? 'Duplicate structure' : 'New salary structure' }}</h1>
+        <p class="ui-muted">
+          Amounts are for a full month; prorated components scale with paid days.
+          <template v-if="editId">Saving replaces all components; already generated slips stay as they are.</template>
+        </p>
       </div>
       <div class="ui-actions">
-        <RouterLink to="/payroll/structures" class="btn btn-ghost">Cancel</RouterLink>
-        <button class="btn btn-primary" :disabled="saving || loading" @click="save">
-          {{ saving ? 'Saving…' : 'Create structure' }}
+        <RouterLink :to="backTo" class="btn btn-ghost">Cancel</RouterLink>
+        <button class="btn btn-primary" :disabled="saving || loading || !!loadError" @click="save">
+          {{ saving ? 'Saving…' : editId ? 'Save changes' : 'Create structure' }}
         </button>
       </div>
     </div>
 
     <div v-if="loading" class="ui-card ui-empty">Loading…</div>
+
+    <div v-else-if="loadError" class="ui-card ui-empty">
+      <strong>Couldn't load this structure</strong>
+      <p>{{ loadError }}</p>
+    </div>
 
     <div v-else class="layout">
       <form class="main" novalidate @submit.prevent="save">

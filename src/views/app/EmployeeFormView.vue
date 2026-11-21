@@ -1,20 +1,29 @@
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import FormField from '../../components/app/FormField.vue'
-import { createEmployee, suggestEmployeeCode } from '../../services/employeeService'
+import {
+  createEmployee,
+  getEmployee,
+  suggestEmployeeCode,
+  toFormValues,
+  updateEmployee,
+} from '../../services/employeeService'
 import * as C from '../../services/constants'
 import { validateField } from '../../utils/validators'
 import { todayISO } from '../../utils/date'
 import { toast } from '../../stores/toast'
 
+const route = useRoute()
 const router = useRouter()
+const editId = route.params.id ? String(route.params.id) : ''
+const backTo = editId ? `/employees/${editId}` : '/employees'
 
 const form = reactive({
   // Personal
   firstName: '', lastName: '', dob: '', gender: '', phone: '', email: '', address: '',
   // Employment
-  code: '', designation: '', department: '', joiningDate: todayISO(), salary: '',
+  code: '', designation: '', department: '', joiningDate: todayISO(), salary: '', status: 'active',
   // Aadhaar
   aadhaar: '', aadhaarName: '', aadhaarDob: '', aadhaarAddress: '',
   // PAN (optional)
@@ -27,6 +36,14 @@ const errors = reactive({})
 const sameAddress = ref(true)
 const saving = ref(false)
 const submitted = ref(false)
+const loading = ref(!!editId)
+const loadError = ref('')
+let initial = null // normalized values the edit form was opened with
+
+// Keep the employee's current value selectable even if it's not in the preset list.
+const withCurrent = (list, v) => (v && !list.includes(v) ? [v, ...list] : list)
+const designations = ref(C.DESIGNATIONS)
+const departments = ref(C.DEPARTMENTS)
 
 const sections = [
   {
@@ -47,10 +64,15 @@ const sections = [
     title: 'Employment details',
     fields: [
       { key: 'code', label: 'Employee code', required: true, rules: ['required'], maxlength: 50, upper: true, hint: 'Must be unique' },
-      { key: 'designation', label: 'Designation', type: 'select', options: C.DESIGNATIONS, required: true, rules: ['required'] },
-      { key: 'department', label: 'Department', type: 'select', options: C.DEPARTMENTS, required: true, rules: ['required'] },
+      { key: 'designation', label: 'Designation', type: 'select', options: designations, required: true, rules: ['required'] },
+      { key: 'department', label: 'Department', type: 'select', options: departments, required: true, rules: ['required'] },
       { key: 'joiningDate', label: 'Date of joining', type: 'date', required: true, rules: ['required'] },
-      { key: 'salary', label: 'Monthly gross salary (₹)', type: 'number', inputmode: 'decimal', required: true, rules: ['required', 'positive'], placeholder: 'e.g. 18000' },
+      editId
+        ? { key: 'salary', label: 'Monthly gross salary (₹)', type: 'number', inputmode: 'decimal', rules: ['positive'], placeholder: 'Leave blank to keep current', hint: 'Only sent if you enter a new amount' }
+        : { key: 'salary', label: 'Monthly gross salary (₹)', type: 'number', inputmode: 'decimal', required: true, rules: ['required', 'positive'], placeholder: 'e.g. 18000' },
+      ...(editId
+        ? [{ key: 'status', label: 'Status', type: 'select', required: true, options: [{ value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }], hint: 'Inactive employees are excluded from attendance and payroll' }]
+        : []),
     ],
   },
   {
@@ -182,9 +204,15 @@ async function submit() {
   try {
     const values = {}
     for (const key of Object.keys(form)) values[key] = norm(key, form[key])
-    const saved = await createEmployee(values)
-    toast(`Employee ${saved.code} added`)
-    router.push(`/employees/${saved.id}`)
+    if (editId) {
+      const saved = await updateEmployee(editId, values, initial)
+      toast(saved ? `Employee ${saved.code} updated` : 'No changes to save')
+      router.push(`/employees/${editId}`)
+    } else {
+      const saved = await createEmployee(values)
+      toast(`Employee ${saved.code} added`)
+      router.push(`/employees/${saved.id}`)
+    }
   } catch (e) {
     submitted.value = false // don't let live validation wipe the server's messages
     if (applyServerErrors(e)) scrollToFirstError()
@@ -195,6 +223,23 @@ async function submit() {
 }
 
 onMounted(async () => {
+  if (editId) {
+    try {
+      const values = toFormValues(await getEmployee(editId))
+      designations.value = withCurrent(C.DESIGNATIONS, values.designation)
+      departments.value = withCurrent(C.DEPARTMENTS, values.department)
+      sameAddress.value = !values.aadhaarAddress || values.aadhaarAddress === values.address
+      Object.assign(form, values)
+      await nextTick() // let the auto-fill watchers settle so they don't count as edits
+      initial = {}
+      for (const key of Object.keys(form)) initial[key] = norm(key, form[key])
+    } catch (e) {
+      loadError.value = e.status === 404 || e.status === 422 ? 'Employee not found' : e.message
+    } finally {
+      loading.value = false
+    }
+    return
+  }
   try {
     if (!form.code) form.code = await suggestEmployeeCode()
   } catch {
@@ -207,12 +252,21 @@ onMounted(async () => {
   <div>
     <div class="ui-page-head">
       <div>
-        <h1>Add new employee</h1>
+        <h1>{{ editId ? 'Edit employee' : 'Add new employee' }}</h1>
         <p class="ui-muted">Fields marked <span class="req">*</span> are required.</p>
       </div>
     </div>
 
-    <form novalidate @submit.prevent="submit">
+    <RouterLink v-if="editId" :to="backTo" class="back">← Back to profile</RouterLink>
+
+    <div v-if="loading" class="ui-card ui-empty">Loading…</div>
+
+    <div v-else-if="loadError" class="ui-card ui-empty">
+      <strong>Couldn't load this employee</strong>
+      <p>{{ loadError }}</p>
+    </div>
+
+    <form v-else novalidate @submit.prevent="submit">
       <nav class="section-nav" aria-label="Form sections">
         <button v-for="s in sections" :key="s.id" type="button" @click="scrollTo(s.id)">{{ s.title }}</button>
       </nav>
@@ -230,7 +284,7 @@ onMounted(async () => {
               v-model="form[f.key]"
               :label="f.label"
               :type="f.type || 'text'"
-              :options="f.options"
+              :options="f.options?.value ?? f.options"
               :required="f.required || (f.key === 'panName' && !!form.pan.trim())"
               :placeholder="f.placeholder"
               :hint="f.hint"
@@ -248,9 +302,9 @@ onMounted(async () => {
       </section>
 
       <div class="save-bar">
-        <RouterLink to="/employees" class="btn btn-ghost">Cancel</RouterLink>
+        <RouterLink :to="backTo" class="btn btn-ghost">Cancel</RouterLink>
         <button type="submit" class="btn btn-primary" :disabled="saving">
-          {{ saving ? 'Saving…' : 'Add employee' }}
+          {{ saving ? 'Saving…' : editId ? 'Save changes' : 'Add employee' }}
         </button>
       </div>
     </form>
@@ -258,6 +312,18 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.back {
+  display: inline-block;
+  margin-bottom: 16px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.back:hover {
+  color: var(--text-h);
+}
+
 .req {
   color: var(--danger);
 }

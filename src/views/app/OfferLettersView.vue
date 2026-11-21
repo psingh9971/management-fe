@@ -1,10 +1,9 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { deleteOfferLetter, listOfferLetters, OFFER_STATUSES } from '../../services/offerLetterService'
+import { listOfferLetters, OFFER_STATUSES } from '../../services/offerLetterService'
 import { formatINR, initials } from '../../utils/format'
 import { formatDate } from '../../utils/date'
-import { toast } from '../../stores/toast'
 
 const router = useRouter()
 const letters = ref([])
@@ -13,13 +12,13 @@ const error = ref('')
 const search = ref('')
 const status = ref('')
 
-const statusMeta = (s) => OFFER_STATUSES.find((x) => x.value === s) || OFFER_STATUSES[0]
+const statusMeta = (s) => OFFER_STATUSES.find((x) => x.value === s) || { label: s, tone: 'muted' }
 
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    letters.value = await listOfferLetters({ search: search.value, status: status.value })
+    letters.value = await listOfferLetters({ status: status.value })
   } catch (e) {
     error.value = e.message || 'Something went wrong'
   } finally {
@@ -27,25 +26,15 @@ async function load() {
   }
 }
 
-let t
-watch(search, () => {
-  clearTimeout(t)
-  t = setTimeout(load, 250)
-})
 watch(status, load)
 
-const counts = computed(() => {
-  const c = { all: letters.value.length }
-  for (const s of OFFER_STATUSES) c[s.value] = letters.value.filter((l) => l.status === s.value).length
-  return c
+const shown = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  if (!q) return letters.value
+  return letters.value.filter((l) =>
+    [l.candidateName, l.employeeCode, l.designation, l.refNo, l.location].some((v) => String(v || '').toLowerCase().includes(q)),
+  )
 })
-
-async function remove(l) {
-  if (!confirm(`Delete offer letter ${l.refNo} for ${l.candidateName}?`)) return
-  await deleteOfferLetter(l.id)
-  toast('Offer letter deleted')
-  load()
-}
 
 onMounted(load)
 </script>
@@ -55,7 +44,7 @@ onMounted(load)
     <div class="ui-page-head">
       <div>
         <h1>Offer letters</h1>
-        <p class="ui-muted">Create branded JP Enterprises × Zepto offer letters and download them as PDF.</p>
+        <p class="ui-muted">Issue branded JP Enterprises × Zepto offer letters, confirm joining dates and download them as PDF.</p>
       </div>
       <div class="ui-actions">
         <RouterLink to="/employees/offer-letters/new" class="btn btn-primary">+ New offer letter</RouterLink>
@@ -63,7 +52,7 @@ onMounted(load)
     </div>
 
     <div class="ui-toolbar">
-      <input v-model="search" class="ui-input ui-search" type="search" placeholder="Search by name, role or ref no…" />
+      <input v-model="search" class="ui-input ui-search" type="search" placeholder="Search by name, code, role or letter no…" />
       <div class="ui-tabs no-margin" role="tablist" aria-label="Status">
         <button :class="{ active: status === '' }" @click="status = ''">All</button>
         <button v-for="s in OFFER_STATUSES" :key="s.value" :class="{ active: status === s.value }" @click="status = s.value">
@@ -79,9 +68,9 @@ onMounted(load)
       <p>{{ error }}</p>
     </div>
 
-    <div v-else-if="!letters.length" class="ui-card ui-empty">
+    <div v-else-if="!shown.length" class="ui-card ui-empty">
       <strong>{{ search || status ? 'No matching offer letters' : 'No offer letters yet' }}</strong>
-      <p v-if="!search && !status">Generate your first one — pick an employee or type in a new candidate.</p>
+      <p v-if="!search && !status">Add the candidate as an employee and assign their salary, then issue the letter.</p>
       <RouterLink v-if="!search && !status" to="/employees/offer-letters/new" class="btn btn-primary btn-sm empty-cta">
         + New offer letter
       </RouterLink>
@@ -102,7 +91,7 @@ onMounted(load)
         </thead>
         <tbody>
           <tr
-            v-for="l in letters"
+            v-for="l in shown"
             :key="l.id"
             class="clickable"
             @click="router.push(`/employees/offer-letters/${l.id}`)"
@@ -112,13 +101,16 @@ onMounted(load)
                 <span class="ui-avatar">{{ initials(l.candidateName) }}</span>
                 <span>
                   <strong>{{ l.candidateName }}</strong>
-                  <small>{{ [l.designation, l.location].filter(Boolean).join(' · ') }}</small>
+                  <small>{{ [l.employeeCode, l.designation, l.location].filter(Boolean).join(' · ') }}</small>
                 </span>
               </div>
             </td>
             <td class="mono">{{ l.refNo }}</td>
-            <td>{{ formatDate(l.offerDate) }}</td>
-            <td>{{ formatDate(l.joiningDate) }}</td>
+            <td>{{ l.offerDate ? formatDate(l.offerDate) : '—' }}</td>
+            <td>
+              {{ l.joiningDate ? formatDate(l.joiningDate) : '—' }}
+              <small v-if="l.joiningDate && l.joiningTentative" class="ui-muted"> tentative</small>
+            </td>
             <td class="num">{{ formatINR(l.monthlyGross) }}</td>
             <td>
               <span class="ui-pill" :class="statusMeta(l.status).tone">{{ statusMeta(l.status).label }}</span>
@@ -128,16 +120,21 @@ onMounted(load)
                 <RouterLink :to="`/employees/offer-letters/${l.id}?download=1`" class="btn btn-ghost btn-sm">
                   Download
                 </RouterLink>
-                <RouterLink :to="`/employees/offer-letters/${l.id}/edit`" class="btn btn-ghost btn-sm">Edit</RouterLink>
-                <button class="btn btn-danger btn-sm" @click="remove(l)">Delete</button>
+                <RouterLink
+                  v-if="l.status === 'provisional'"
+                  :to="`/employees/offer-letters/${l.id}/edit`"
+                  class="btn btn-ghost btn-sm"
+                >
+                  Edit
+                </RouterLink>
               </div>
             </td>
           </tr>
         </tbody>
       </table>
     </div>
-    <p v-if="!loading && letters.length" class="ui-muted foot">
-      {{ counts.all }} letter{{ counts.all === 1 ? '' : 's' }} shown
+    <p v-if="!loading && shown.length" class="ui-muted foot">
+      {{ shown.length }} letter{{ shown.length === 1 ? '' : 's' }} shown
     </p>
   </div>
 </template>

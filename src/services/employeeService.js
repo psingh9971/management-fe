@@ -2,7 +2,10 @@
 //   GET  /employees?skip&limit&search&department&is_active -> { items, total, skip, limit }
 //   GET  /employees/{id}                                   -> EmployeeOut
 //   POST /employees  (EmployeeCreate)                      -> EmployeeOut
-// Update / delete endpoints don't exist yet.
+//   PATCH /employees/{id}  (EmployeeUpdate, partial)       -> EmployeeOut — only the keys sent change;
+//         bank_detail / aadhaar_card / pan_card: object = create/replace, null = remove, omitted = untouched
+//   DELETE /employees/{id}/soft                           -> 204 — hides + deactivates, keeps history.
+//   (DELETE /employees/{id} is a super-admin hard delete that wipes all linked data; the UI never calls it.)
 import { http } from './http'
 
 const MAX_LIMIT = 200
@@ -98,6 +101,35 @@ export function toCreatePayload(f) {
   }
 }
 
+// Employee -> form values (the inverse of the mapping above). Salary isn't returned by the API.
+export function toFormValues(e) {
+  return {
+    firstName: e.firstName, lastName: e.lastName, dob: e.dob, gender: e.gender, phone: e.phone, email: e.email,
+    address: e.address, code: e.code, designation: e.designation, department: e.department,
+    joiningDate: e.joiningDate, salary: '', status: e.status,
+    aadhaar: e.aadhaar?.number || '', aadhaarName: e.aadhaar?.name || '', aadhaarDob: e.aadhaar?.dob || '',
+    aadhaarAddress: e.aadhaar?.address || '',
+    pan: e.pan?.number || '', panName: e.pan?.name || '', panDob: e.pan?.dob || '',
+    accountHolder: e.bank?.accountHolder || '', bankName: e.bank?.bankName || '', branch: e.bank?.branch || '',
+    accountNumber: e.bank?.accountNumber || '', confirmAccountNumber: e.bank?.accountNumber || '',
+    ifsc: e.bank?.ifsc || '',
+  }
+}
+
+// Form values -> EmployeeUpdate holding only what differs from `initial` (the values the form was opened with).
+// Nested records (bank / Aadhaar / PAN) are sent whole when any of their fields changed.
+export function toUpdatePayload(values, initial) {
+  const next = { ...toCreatePayload(values), is_active: values.status !== 'inactive' }
+  const prev = { ...toCreatePayload(initial), is_active: initial.status !== 'inactive' }
+  if (values.salary === '' || values.salary === null || values.salary === undefined) delete next.salary
+  delete prev.salary
+  const out = {}
+  for (const [k, v] of Object.entries(next)) {
+    if (JSON.stringify(v) !== JSON.stringify(prev[k])) out[k] = v
+  }
+  return out
+}
+
 function query(params) {
   const q = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) if (v !== '' && v !== null && v !== undefined) q.set(k, v)
@@ -134,6 +166,17 @@ export async function getEmployee(id) {
 
 export async function createEmployee(formValues) {
   return toEmployee(await http.post('/employees', toCreatePayload(formValues)))
+}
+
+export async function updateEmployee(id, values, initial) {
+  const payload = toUpdatePayload(values, initial)
+  if (!Object.keys(payload).length) return null // nothing changed
+  return toEmployee(await http.patch(`/employees/${encodeURIComponent(id)}`, payload))
+}
+
+// Soft delete: the employee disappears from every list but their attendance / leave / payroll history is kept.
+export async function deleteEmployee(id) {
+  await http.delete(`/employees/${encodeURIComponent(id)}/soft`)
 }
 
 // Suggest the next employee code (JPE-0001, JPE-0002, …) based on how many exist.

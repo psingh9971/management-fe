@@ -4,6 +4,7 @@ import FormField from '../FormField.vue'
 import {
   assignStructure,
   currentAssignment,
+  deleteAssignment,
   describeComponent,
   listAssignments,
   listStructures,
@@ -39,6 +40,27 @@ const breakdown = computed(() =>
   current.value?.structure ? previewStructure(current.value.structure.components, current.value.monthlyGross) : null,
 )
 const structureName = (a) => a.structure?.name || 'Unknown structure'
+
+// Only the newest assignment can be undone (the backend then reopens the previous one).
+const latest = computed(() => (assignments.value ? assignments.value[0] : lastAssigned.value) || null)
+const isLatest = (a) => !!a?.id && a.id === latest.value?.id
+const undoing = ref(false)
+
+async function undo(a) {
+  const msg = `Undo ${structureName(a)} at ${formatINR(a.monthlyGross)} from ${formatDate(a.effectiveFrom)}?`
+  if (!confirm(`${msg} The previous salary assignment (if any) will apply again.`)) return
+  undoing.value = true
+  try {
+    await deleteAssignment(props.employeeId, a.id)
+    lastAssigned.value = null
+    toast('Salary assignment removed')
+    if (assignments.value) assignments.value = await listAssignments(props.employeeId)
+  } catch (e) {
+    toast(e.message, 'error')
+  } finally {
+    undoing.value = false
+  }
+}
 
 async function load() {
   loading.value = true
@@ -145,6 +167,9 @@ onMounted(load)
             <strong>{{ formatDate(current.effectiveFrom) }}</strong>
           </div>
         </div>
+        <button v-if="isLatest(current)" class="link-btn danger" :disabled="undoing" @click="undo(current)">
+          {{ undoing ? 'Removing…' : 'Undo this assignment' }}
+        </button>
 
         <div v-if="breakdown" class="breakdown">
           <span v-for="r in breakdown.rows" :key="r.code" class="item" :class="r.type">
@@ -165,6 +190,9 @@ onMounted(load)
           <li v-for="a in upcoming" :key="a.id">
             <span class="ui-pill info">Upcoming</span>
             {{ structureName(a) }} · {{ formatINR(a.monthlyGross) }} · from {{ formatDate(a.effectiveFrom) }}
+            <button v-if="isLatest(a)" class="link-btn danger" :disabled="undoing" @click="undo(a)">
+              {{ undoing ? 'Removing…' : 'Undo' }}
+            </button>
           </li>
           <li v-for="a in history" :key="a.id">
             <span class="ui-pill muted">Past</span>
@@ -249,6 +277,30 @@ onMounted(load)
 
 .summary .net {
   color: var(--accent);
+}
+
+.link-btn {
+  margin-top: 12px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.hist .link-btn {
+  margin-top: 0;
+}
+
+.link-btn.danger {
+  color: var(--danger);
+}
+
+.link-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .breakdown {

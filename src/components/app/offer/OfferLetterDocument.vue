@@ -1,11 +1,13 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { COMPANY, monthlyTotal } from '../../../services/offerLetterService'
+import { COMPANY } from '../../../services/offerLetterService'
 import { amountInWords, formatINR } from '../../../utils/format'
 import { formatDate } from '../../../utils/date'
 
 // A4 offer letter with JP Enterprises letterhead and Zepto partner branding.
 // Page 1: the letter. Page 2: Annexure (salary + terms) and acceptance.
+// `letter` is the UI shape from offerLetterService.toOfferLetter(), plus optional employee contact
+// fields (salutation, address, phone, email) and the signatory ({ signatoryName, signatoryTitle }).
 const props = defineProps({ letter: { type: Object, required: true } })
 
 // Drop an official Zepto logo at public/zepto-logo.png to replace the text wordmark.
@@ -13,8 +15,14 @@ const ZEPTO_LOGO = "/zepto-logo.png"
 const zeptoLogoFailed = ref(false)
 
 const l = computed(() => props.letter)
-const monthly = computed(() => monthlyTotal(l.value.salary))
-const annual = computed(() => monthly.value * 12)
+const sumOf = (list) => (list || []).reduce((s, c) => s + (Number(c.amount) || 0), 0)
+const monthly = computed(() => l.value.monthlyGross || sumOf(l.value.salary))
+const annual = computed(() => l.value.annualGross || monthly.value * 12)
+const deductions = computed(() => l.value.deductions || [])
+const monthlyDeductions = computed(() => l.value.monthlyDeductions ?? sumOf(deductions.value))
+const net = computed(() => l.value.monthlyNet || monthly.value - monthlyDeductions.value)
+const tentative = computed(() => l.value.joiningTentative !== false)
+const annualOf = (c) => c.annual ?? (Number(c.amount) || 0) * 12
 const firstName = computed(() => (l.value.candidateName || '').trim().split(' ')[0] || 'Candidate')
 const terms = computed(() =>
   (l.value.terms || '')
@@ -36,13 +44,9 @@ const keyTerms = computed(() =>
     ['Designation', blank(l.value.designation)],
     ['Department', l.value.department],
     ['Work location', l.value.location],
-    ['Employment type', l.value.employmentType],
-    ['Reporting to', l.value.reportingTo],
-    ['Shift / timings', l.value.shift],
-    ['Date of joining', d(l.value.joiningDate)],
-    ['Probation period', l.value.probationMonths ? `${l.value.probationMonths} month(s)` : 'Not applicable'],
-    ['Notice period', l.value.noticeDays ? `${l.value.noticeDays} days (after confirmation)` : ''],
+    ['Date of joining', l.value.joiningDate ? `${d(l.value.joiningDate)}${tentative.value ? ' (tentative)' : ''}` : d('')],
     ['Gross salary', `${formatINR(monthly.value)} per month (${formatINR(annual.value)} per annum)`],
+    ['Net take-home', monthlyDeductions.value ? `${formatINR(net.value)} per month (after deductions)` : ''],
   ].filter(([, v]) => v),
 )
 </script>
@@ -51,6 +55,7 @@ const keyTerms = computed(() =>
   <div class="ol-doc ol-print-target">
     <!-- ================= PAGE 1 ================= -->
     <section class="ol-page">
+      <div v-if="l.status === 'withdrawn'" class="stamp" aria-hidden="true">WITHDRAWN</div>
       <header class="lh">
         <div class="lh-brand">
           <img src="/logo2.png" alt="" class="lh-logo" />
@@ -77,7 +82,7 @@ const keyTerms = computed(() =>
 
         <div class="to">
           <div>To,</div>
-          <div class="to-name">{{ l.salutation }} {{ blank(l.candidateName, 'Candidate name') }}</div>
+          <div class="to-name">{{ [l.salutation, blank(l.candidateName, 'Candidate name')].filter(Boolean).join(' ') }}</div>
           <div v-for="(line, i) in addressLines" :key="i">{{ line }}</div>
           <div v-if="l.phone">Phone: {{ l.phone }}</div>
           <div v-if="l.email">Email: {{ l.email }}</div>
@@ -130,6 +135,7 @@ const keyTerms = computed(() =>
 
     <!-- ================= PAGE 2 ================= -->
     <section class="ol-page">
+      <div v-if="l.status === 'withdrawn'" class="stamp" aria-hidden="true">WITHDRAWN</div>
       <header class="lh compact">
         <div class="lh-brand">
           <img src="/logo2.png" alt="" class="lh-logo" />
@@ -146,7 +152,7 @@ const keyTerms = computed(() =>
       <div class="body">
         <h2 class="annex">Annexure A — Compensation &amp; terms</h2>
         <p class="annex-sub">
-          {{ l.salutation }} {{ blank(l.candidateName, 'Candidate name') }} · {{ blank(l.designation, 'Designation') }} ·
+          {{ [l.salutation, blank(l.candidateName, 'Candidate name')].filter(Boolean).join(' ') }} · {{ blank(l.designation, 'Designation') }} ·
           Ref {{ l.refNo || 'JPE/OL/—' }}
         </p>
 
@@ -162,7 +168,10 @@ const keyTerms = computed(() =>
             <tr v-for="(c, i) in l.salary" :key="i">
               <td>{{ c.label }}</td>
               <td class="num">{{ formatINR(c.amount).replace('₹', '') }}</td>
-              <td class="num">{{ formatINR((Number(c.amount) || 0) * 12).replace('₹', '') }}</td>
+              <td class="num">{{ formatINR(annualOf(c)).replace('₹', '') }}</td>
+            </tr>
+            <tr v-if="!l.salary?.length">
+              <td colspan="3" class="muted-cell">Salary is taken from the employee's assigned salary structure.</td>
             </tr>
           </tbody>
           <tfoot>
@@ -170,6 +179,30 @@ const keyTerms = computed(() =>
               <td>Gross salary</td>
               <td class="num">{{ formatINR(monthly) }}</td>
               <td class="num">{{ formatINR(annual) }}</td>
+            </tr>
+          </tfoot>
+        </table>
+
+        <table v-if="deductions.length" class="pay ded">
+          <thead>
+            <tr>
+              <th>Deductions</th>
+              <th class="num">Monthly (₹)</th>
+              <th class="num">Annual (₹)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(c, i) in deductions" :key="i">
+              <td>{{ c.label }}</td>
+              <td class="num">{{ formatINR(c.amount).replace('₹', '') }}</td>
+              <td class="num">{{ formatINR(annualOf(c)).replace('₹', '') }}</td>
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr>
+              <td>Net take-home</td>
+              <td class="num">{{ formatINR(net) }}</td>
+              <td class="num">{{ formatINR(net * 12) }}</td>
             </tr>
           </tfoot>
         </table>
@@ -185,7 +218,7 @@ const keyTerms = computed(() =>
           <p>
             I, {{ blank(l.candidateName, '____________________') }}, have read and understood the terms of this offer and
             accept the position of {{ blank(l.designation, '__________') }} with JP Enterprises. I will join on
-            {{ d(l.joiningDate) }}.
+            {{ d(l.joiningDate) }}<template v-if="tentative && l.joiningDate"> or on the date confirmed by the company</template>.
           </p>
           <div class="sig-row">
             <div><span class="line" />Candidate signature</div>
@@ -235,7 +268,7 @@ const keyTerms = computed(() =>
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12mm 16mm 6mm;
+  padding: 10mm 16mm 5mm;
 }
 
 .lh.compact {
@@ -336,9 +369,9 @@ const keyTerms = computed(() =>
 /* Body */
 .body {
   flex: 1;
-  padding: 8mm 18mm 6mm;
+  padding: 6mm 18mm 4mm;
   font-size: 10pt;
-  line-height: 1.55;
+  line-height: 1.5;
 }
 
 .body p {
@@ -405,7 +438,7 @@ const keyTerms = computed(() =>
 }
 
 .sign-space {
-  height: 16mm;
+  height: 12mm;
 }
 
 .sign-name {
@@ -510,7 +543,7 @@ h3 {
   display: grid;
   grid-template-columns: 2fr 1fr 1fr;
   gap: 8mm;
-  margin-top: 12mm;
+  margin-top: 9mm;
   font-size: 8.5pt;
   color: var(--soft);
 }
@@ -531,5 +564,27 @@ h3 {
   color: #fff;
   background: var(--navy);
   border-top: 1.2mm solid var(--gold);
+}
+.pay.ded {
+  margin-top: 4mm;
+}
+
+.muted-cell {
+  color: var(--soft);
+  font-style: italic;
+}
+.stamp {
+  position: absolute;
+  top: 45%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-28deg);
+  font-size: 72pt;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  color: rgba(200, 40, 40, 0.14);
+  border: 6px solid rgba(200, 40, 40, 0.14);
+  padding: 2mm 8mm;
+  pointer-events: none;
+  z-index: 2;
 }
 </style>

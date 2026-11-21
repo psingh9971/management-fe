@@ -1,14 +1,15 @@
-// Offer letter service — mock implementation (localStorage) until the backend endpoints exist.
-// Planned API:
-//   GET    /offer-letters?search&status        -> { items, total }
-//   GET    /offer-letters/{id}                 -> OfferLetterOut
-//   POST   /offer-letters                      -> OfferLetterOut   (server assigns ref_no)
-//   PUT    /offer-letters/{id}                 -> OfferLetterOut
-//   DELETE /offer-letters/{id}
-// When wiring, keep the UI shape below and add toOfferLetter()/toPayload() mappers like employeeService.js.
-import { delay, clone, uid } from './mockDb'
-
-const KEY = 'jpz-offer-letters-v1'
+// Offer letters API
+//   POST  /employees/{employee_id}/offer-letters   OfferLetterCreate -> OfferLetterOut  (status "provisional")
+//   GET   /employees/{employee_id}/offer-letters   ?skip&limit       -> Page<OfferLetterOut>
+//   GET   /offer-letters                           ?status&skip&limit -> Page<OfferLetterOut>
+//   GET   /offer-letters/{id}                                         -> OfferLetterOut
+//   PATCH /offer-letters/{id}                      OfferLetterUpdate -> OfferLetterOut  (provisional letters only)
+//   POST  /offer-letters/{id}/confirm              { joining_date, update_employee_joining_date }
+//   POST  /offer-letters/{id}/withdraw             { reason (min 3) }
+// The salary breakdown is read by the server from the employee's current salary assignment
+// (also on every PATCH), and the candidate name comes from the employee record.
+import { http } from './http'
+import { todayISO, addDays } from '../utils/date'
 
 export const COMPANY = {
   name: 'JP Enterprises',
@@ -20,143 +21,192 @@ export const COMPANY = {
 }
 
 export const OFFER_STATUSES = [
-  { value: 'draft', label: 'Draft', tone: 'muted' },
-  { value: 'issued', label: 'Issued', tone: 'info' },
-  { value: 'accepted', label: 'Accepted', tone: 'success' },
-  { value: 'declined', label: 'Declined', tone: 'danger' },
+  { value: 'provisional', label: 'Provisional', tone: 'warning' },
+  { value: 'confirmed', label: 'Confirmed', tone: 'success' },
+  { value: 'withdrawn', label: 'Withdrawn', tone: 'muted' },
 ]
 
 export const DEFAULT_TERMS = [
   'Your employment will be governed by the rules, policies and code of conduct of JP Enterprises as amended from time to time.',
+  'You will be on probation for 3 months from your date of joining. During probation, either party may end employment with 7 days’ notice; after confirmation, the notice period is 30 days.',
   'Statutory deductions such as PF, ESI and Professional Tax will be made from your salary as applicable under law.',
   'Working hours and weekly offs will follow the roster of your assigned store. You may be required to work in shifts, including weekends and public holidays, as per operational needs.',
   'This offer is subject to verification of your documents (Aadhaar, PAN, bank details, address proof) and satisfactory background checks.',
-  'During probation, either party may end employment with 7 days’ notice. After confirmation, the notice period is as stated above.',
   'You are expected to maintain confidentiality of all business, customer and partner (including Zepto) information during and after your employment.',
 ].join('\n')
 
-// Default monthly salary split from a gross amount.
-export function splitGross(gross) {
-  const g = Math.max(0, Math.round(Number(gross) || 0))
-  const basic = Math.round(g * 0.5)
-  const hra = Math.round(g * 0.2)
-  const conveyance = Math.min(1600, g - basic - hra)
-  return [
-    { label: 'Basic salary', amount: basic },
-    { label: 'House rent allowance (HRA)', amount: hra },
-    { label: 'Conveyance allowance', amount: Math.max(0, conveyance) },
-    { label: 'Special allowance', amount: Math.max(0, g - basic - hra - Math.max(0, conveyance)) },
-  ]
-}
+// ---------- signatory (an org-wide setting, not stored on the letter by the API) ----------
+const SIGN_KEY = 'jpz-offer-signatory-v1'
 
-export const monthlyTotal = (components = []) => components.reduce((s, c) => s + (Number(c.amount) || 0), 0)
-
-export function blankOffer() {
-  const today = new Date()
-  const iso = (d) => d.toISOString().slice(0, 10)
-  const plus = (days) => iso(new Date(today.getTime() + days * 86400000))
-  return {
-    employeeId: '',
-    candidateName: '',
-    salutation: 'Mr.',
-    email: '',
-    phone: '',
-    address: '',
-    designation: '',
-    department: '',
-    location: '',
-    employmentType: 'Full-time',
-    reportingTo: '',
-    shift: '',
-    offerDate: iso(today),
-    joiningDate: plus(7),
-    acceptBy: plus(3),
-    probationMonths: 3,
-    noticeDays: 30,
-    salary: splitGross(15000),
-    terms: DEFAULT_TERMS,
-    signatoryName: '',
-    signatoryTitle: 'Proprietor',
-    status: 'draft',
-  }
-}
-
-// ---------- mock storage ----------
-function readAll() {
+export function getSignatory() {
   try {
-    return JSON.parse(localStorage.getItem(KEY)) || []
+    return { name: '', title: 'Proprietor', ...JSON.parse(localStorage.getItem(SIGN_KEY) || '{}') }
   } catch {
-    return []
+    return { name: '', title: 'Proprietor' }
   }
 }
 
-function writeAll(list) {
+export function saveSignatory(s) {
   try {
-    localStorage.setItem(KEY, JSON.stringify(list))
+    localStorage.setItem(SIGN_KEY, JSON.stringify({ name: s.name || '', title: s.title || '' }))
   } catch {
     /* storage unavailable */
   }
 }
 
-function nextRef(list, offerDate) {
-  const year = (offerDate || new Date().toISOString()).slice(0, 4)
-  const n = list.filter((l) => l.refNo?.includes(`/${year}/`)).length + 1
-  return `JPE/OL/${year}/${String(n).padStart(4, '0')}`
+// ---------- mapping ----------
+const num = (v) => Number(v) || 0
+const toLine = (c) => ({ code: c.code, label: c.name || c.code, amount: num(c.monthly), annual: num(c.annual) })
+
+// OfferLetterOut -> UI shape used by OfferLetterDocument.vue and the views.
+export function toOfferLetter(r) {
+  return {
+    id: r.id,
+    refNo: r.letter_number || '',
+    employeeId: r.employee_id,
+    employeeCode: r.employee_code || '',
+    status: r.status,
+    candidateName: r.candidate_name || '',
+    designation: r.designation || '',
+    department: r.department || '',
+    location: r.work_location || '',
+    offerDate: r.offer_date || '',
+    tentativeJoiningDate: r.tentative_joining_date || '',
+    confirmedJoiningDate: r.joining_date || '',
+    joiningDate: r.joining_date || r.tentative_joining_date || '',
+    joiningTentative: !r.joining_date,
+    acceptBy: r.valid_until || '',
+    structureName: r.structure_name || '',
+    salary: (r.earnings || []).map(toLine),
+    deductions: (r.deductions || []).map(toLine).filter((d) => d.amount > 0),
+    monthlyGross: num(r.monthly_gross),
+    annualGross: num(r.annual_gross),
+    monthlyDeductions: num(r.monthly_deductions),
+    monthlyNet: num(r.monthly_net),
+    terms: r.terms || '',
+    confirmedAt: r.confirmed_at || '',
+    withdrawnAt: r.withdrawn_at || '',
+    withdrawalReason: r.withdrawal_reason || '',
+    createdAt: r.created_at || '',
+    updatedAt: r.updated_at || '',
+  }
 }
 
-function normalise(data) {
-  const salary = (data.salary || [])
-    .map((c) => ({ label: String(c.label || '').trim(), amount: Math.round(Number(c.amount) || 0) }))
-    .filter((c) => c.label)
-  return { ...clone(data), salary, monthlyGross: monthlyTotal(salary) }
+const orNull = (v) => (String(v ?? '').trim() ? String(v).trim() : null)
+
+function toBody(f, { create }) {
+  const body = {
+    designation: orNull(f.designation),
+    department: orNull(f.department),
+    work_location: orNull(f.location),
+    tentative_joining_date: f.tentativeJoiningDate || null,
+    valid_until: f.acceptBy || null,
+    terms: orNull(f.terms),
+  }
+  if (create) body.offer_date = f.offerDate || null
+  return body
 }
 
-export async function listOfferLetters({ search = '', status = '' } = {}) {
-  await delay()
-  const q = search.trim().toLowerCase()
-  return readAll()
-    .filter((l) => !status || l.status === status)
-    .filter(
-      (l) =>
-        !q ||
-        [l.candidateName, l.designation, l.refNo, l.location].filter(Boolean).some((v) => v.toLowerCase().includes(q)),
-    )
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+export function blankOffer() {
+  const today = todayISO()
+  return {
+    employeeId: '',
+    designation: '',
+    department: '',
+    location: '',
+    offerDate: today,
+    tentativeJoiningDate: addDays(today, 7),
+    acceptBy: addDays(today, 3),
+    terms: DEFAULT_TERMS,
+  }
+}
+
+// ---------- API ----------
+async function allPages(path, params = {}) {
+  const items = []
+  for (let skip = 0; ; skip += 200) {
+    const qs = new URLSearchParams({ ...params, skip, limit: 200 })
+    const res = await http.get(`${path}?${qs}`)
+    items.push(...(res.items || []))
+    if (!res.items?.length || items.length >= (res.total ?? 0)) break
+  }
+  return items
+}
+
+const newestFirst = (a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')
+
+export async function listOfferLetters({ status = '' } = {}) {
+  const items = await allPages('/offer-letters', status ? { status } : {})
+  return items.map(toOfferLetter).sort(newestFirst)
+}
+
+export async function listEmployeeOfferLetters(employeeId) {
+  const items = await allPages(`/employees/${encodeURIComponent(employeeId)}/offer-letters`)
+  return items.map(toOfferLetter).sort(newestFirst)
 }
 
 export async function getOfferLetter(id) {
-  await delay()
-  const l = readAll().find((x) => x.id === id)
-  if (!l) throw Object.assign(new Error('Offer letter not found'), { status: 404 })
-  return clone(l)
+  return toOfferLetter(await http.get(`/offer-letters/${encodeURIComponent(id)}`))
 }
 
-export async function createOfferLetter(data) {
-  await delay(400)
-  const list = readAll()
-  const now = new Date().toISOString()
-  const letter = { ...normalise(data), id: uid(), refNo: nextRef(list, data.offerDate), createdAt: now, updatedAt: now }
-  list.push(letter)
-  writeAll(list)
-  return clone(letter)
+export async function createOfferLetter(employeeId, form) {
+  const raw = await http.post(`/employees/${encodeURIComponent(employeeId)}/offer-letters`, toBody(form, { create: true }))
+  return toOfferLetter(raw)
 }
 
-export async function updateOfferLetter(id, data) {
-  await delay(400)
-  const list = readAll()
-  const i = list.findIndex((x) => x.id === id)
-  if (i < 0) throw Object.assign(new Error('Offer letter not found'), { status: 404 })
-  list[i] = { ...list[i], ...normalise(data), id, refNo: list[i].refNo, updatedAt: new Date().toISOString() }
-  writeAll(list)
-  return clone(list[i])
+export async function updateOfferLetter(id, form) {
+  return toOfferLetter(await http.patch(`/offer-letters/${encodeURIComponent(id)}`, toBody(form, { create: false })))
 }
 
-export async function setOfferStatus(id, status) {
-  const current = await getOfferLetter(id)
-  return updateOfferLetter(id, { ...current, status })
+export async function confirmOfferLetter(id, { joiningDate, updateEmployeeJoiningDate = true }) {
+  const raw = await http.post(`/offer-letters/${encodeURIComponent(id)}/confirm`, {
+    joining_date: joiningDate,
+    update_employee_joining_date: !!updateEmployeeJoiningDate,
+  })
+  return toOfferLetter(raw)
 }
 
-export async function deleteOfferLetter(id) {
-  await delay()
-  writeAll(readAll().filter((x) => x.id !== id))
+export async function withdrawOfferLetter(id, reason) {
+  return toOfferLetter(await http.post(`/offer-letters/${encodeURIComponent(id)}/withdraw`, { reason: reason.trim() }))
+}
+
+// The salary a new letter will carry: GET /employees/{id}/salary-assignments/current.
+// Returns null when the employee has no salary assigned.
+export async function getOfferSalary(employeeId) {
+  try {
+    const res = await http.get(`/employees/${encodeURIComponent(employeeId)}/salary-assignments/current`)
+    if (!res?.assignment) return null
+    const comps = res.breakdown?.components || []
+    const line = (c) => ({ code: c.code, label: c.name || c.code, amount: num(c.amount), annual: num(c.amount) * 12 })
+    const gross = num(res.breakdown?.gross_earnings ?? res.assignment.monthly_gross)
+    const ded = num(res.breakdown?.total_deductions)
+    return {
+      structureName: res.assignment.structure_name || '',
+      salary: comps.filter((c) => c.component_type !== 'deduction').map(line),
+      deductions: comps.filter((c) => c.component_type === 'deduction').map(line).filter((d) => d.amount > 0),
+      monthlyGross: gross,
+      annualGross: gross * 12,
+      monthlyDeductions: ded,
+      monthlyNet: num(res.breakdown?.net_pay) || gross - ded,
+    }
+  } catch (e) {
+    if (e.status === 404) return null
+    throw e
+  }
+}
+
+// Fields printed on the letter that the offer-letter API doesn't store: the employee's contact
+// details (from the employee record) and the org-wide signatory.
+export function forDocument(letter, employee = null, signatory = getSignatory()) {
+  const e = employee || {}
+  return {
+    ...letter,
+    candidateName: letter.candidateName || e.fullName || '',
+    salutation: e.gender === 'female' ? 'Ms.' : e.gender === 'male' ? 'Mr.' : '',
+    address: e.address || '',
+    phone: e.phone || '',
+    email: e.email || '',
+    signatoryName: signatory.name,
+    signatoryTitle: signatory.title,
+  }
 }

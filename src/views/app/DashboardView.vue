@@ -3,10 +3,9 @@ import { computed, onMounted, ref } from 'vue'
 import { useAuth } from '../../stores/auth'
 import { listAllEmployees } from '../../services/employeeService'
 import { getDailyAttendance } from '../../services/attendanceService'
-import { getSummary } from '../../services/financeService'
 import { ATTENDANCE_STATUSES } from '../../services/constants'
-import { formatINR, initials } from '../../utils/format'
-import { currentMonth, formatDate, formatMonth, todayISO } from '../../utils/date'
+import { initials } from '../../utils/format'
+import { formatDate, todayISO } from '../../utils/date'
 
 const { user } = useAuth()
 const TONE = { P: 'success', HD: 'warning', A: 'danger', L: 'info', WO: 'muted' }
@@ -14,7 +13,6 @@ const TONE = { P: 'success', HD: 'warning', A: 'danger', L: 'info', WO: 'muted' 
 const loading = ref(true)
 const employees = ref([])
 const today = ref(null) // counts from GET /attendance/daily
-const finance = ref({ income: 0, expense: 0, net: 0 })
 const error = ref('')
 
 const active = computed(() => employees.value.filter((e) => e.status === 'active'))
@@ -34,10 +32,9 @@ const greeting = (() => {
 
 onMounted(async () => {
   try {
-    const [emps, att, fin] = await Promise.all([listAllEmployees(), getDailyAttendance(todayISO()), getSummary(currentMonth())])
+    const [emps, att] = await Promise.all([listAllEmployees(), getDailyAttendance(todayISO())])
     employees.value = emps
     today.value = att.counts
-    finance.value = fin
   } catch (e) {
     error.value = e.message
   } finally {
@@ -75,16 +72,6 @@ onMounted(async () => {
         <span class="ui-tile-sub">
           {{ markedToday ? `${todayCounts.A} absent · ${todayCounts.L} on leave · ${todayCounts.NR} not marked` : 'Not marked yet' }}
         </span>
-      </RouterLink>
-      <RouterLink to="/finance" class="ui-tile link-tile">
-        <span class="ui-tile-label">Income · {{ formatMonth(currentMonth()) }}</span>
-        <span class="ui-tile-value">{{ formatINR(finance.income) }}</span>
-        <span class="ui-tile-sub">Expenses {{ formatINR(finance.expense) }}</span>
-      </RouterLink>
-      <RouterLink to="/finance" class="ui-tile link-tile">
-        <span class="ui-tile-label">Net this month</span>
-        <span class="ui-tile-value">{{ formatINR(finance.net) }}</span>
-        <span class="ui-tile-sub">Income minus expenses</span>
       </RouterLink>
     </div>
 
@@ -133,7 +120,6 @@ onMounted(async () => {
       </div>
     </div>
 
-    <p class="ui-muted demo-note">Finance still shows sample data until its API is connected.</p>
   </div>
 </template>
 
@@ -219,9 +205,6 @@ onMounted(async () => {
   min-width: 0;
 }
 
-.demo-note {
-  margin-top: 24px;
-}
 
 @media (max-width: 900px) {
   .cols {

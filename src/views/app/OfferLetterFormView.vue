@@ -8,13 +8,15 @@ import {
   blankOffer,
   createOfferLetter,
   DEFAULT_TERMS,
+  forDocument,
   getOfferLetter,
-  monthlyTotal,
-  splitGross,
+  getOfferSalary,
+  getSignatory,
+  saveSignatory,
   updateOfferLetter,
 } from '../../services/offerLetterService'
-import { listAllEmployees } from '../../services/employeeService'
-import { DEPARTMENTS, DESIGNATIONS, EMPLOYMENT_TYPES, SHIFTS, STORES } from '../../services/constants'
+import { getEmployee, listAllEmployees } from '../../services/employeeService'
+import { DEPARTMENTS, DESIGNATIONS, STORES } from '../../services/constants'
 import { validateField } from '../../utils/validators'
 import { formatINR } from '../../utils/format'
 import { toast } from '../../stores/toast'
@@ -24,115 +26,139 @@ const router = useRouter()
 const editId = route.params.id || null
 
 const form = reactive(blankOffer())
-const refNo = ref('')
+const signatory = reactive(getSignatory())
+const existing = ref(null) // the letter being edited
 const errors = reactive({})
 const loading = ref(!!editId)
 const loadError = ref('')
 const saving = ref(false)
-const gross = ref(15000)
+const formError = ref('')
 const mobileTab = ref('edit')
 
 const employees = ref([])
 const employeesError = ref('')
+const employee = ref(null)
 
-const preview = computed(() => ({ ...form, refNo: refNo.value }))
-const total = computed(() => monthlyTotal(form.salary))
+// Salary comes from the employee's current salary assignment (the server reads it again on save).
+const salary = ref(null)
+const salaryState = ref('idle') // idle | loading | ready | none | error
+const salaryError = ref('')
+
 const employeeOptions = computed(() =>
   employees.value.map((e) => ({ value: e.id, label: `${e.fullName} (${e.code})` })),
 )
 
-function applyEmployee(id) {
-  const e = employees.value.find((x) => x.id === id)
-  if (!e) return
-  Object.assign(form, {
-    employeeId: e.id,
-    candidateName: e.fullName,
-    salutation: e.gender === 'female' ? 'Ms.' : 'Mr.',
-    email: e.email,
-    phone: e.phone,
-    address: e.address,
-    designation: e.designation || form.designation,
-    department: e.department || form.department,
-    joiningDate: e.joiningDate || form.joiningDate,
-  })
-  if (e.salary) {
-    gross.value = e.salary
-    form.salary = splitGross(e.salary)
+const preview = computed(() =>
+  forDocument(
+    {
+      ...(existing.value || {}),
+      ...form,
+      refNo: existing.value?.refNo || '',
+      status: 'provisional',
+      candidateName: employee.value?.fullName || existing.value?.candidateName || '',
+      joiningDate: form.tentativeJoiningDate,
+      joiningTentative: true,
+      ...(salary.value || {}),
+    },
+    employee.value,
+    signatory,
+  ),
+)
+
+async function loadSalary(employeeId) {
+  salary.value = null
+  salaryError.value = ''
+  salaryState.value = 'loading'
+  try {
+    salary.value = await getOfferSalary(employeeId)
+    salaryState.value = salary.value ? 'ready' : 'none'
+  } catch (e) {
+    salaryError.value = e.message
+    salaryState.value = 'error'
   }
 }
 
 function onEmployeePick(id) {
   form.employeeId = id
-  if (id) applyEmployee(id)
-}
-
-function resplit() {
-  form.salary = splitGross(gross.value)
-}
-
-function addComponent() {
-  form.salary.push({ label: '', amount: 0 })
-}
-
-function removeComponent(i) {
-  form.salary.splice(i, 1)
+  errors.employeeId = ''
+  employee.value = employees.value.find((x) => x.id === id) || null
+  if (!employee.value) {
+    salary.value = null
+    salaryState.value = 'idle'
+    return
+  }
+  form.designation = employee.value.designation || form.designation
+  form.department = employee.value.department || form.department
+  loadSalary(id)
 }
 
 function validate() {
   Object.keys(errors).forEach((k) => delete errors[k])
-  errors.candidateName = validateField(form.candidateName, ['required'])
+  if (!editId) {
+    errors.employeeId = form.employeeId ? '' : 'Pick the employee this offer is for'
+    errors.offerDate = validateField(form.offerDate, ['required'])
+  }
   errors.designation = validateField(form.designation, ['required'])
-  errors.offerDate = validateField(form.offerDate, ['required'])
-  errors.joiningDate = validateField(form.joiningDate, ['required'])
-  errors.signatoryName = validateField(form.signatoryName, ['required'])
-  if (form.email) errors.email = validateField(form.email, ['email'])
+  if (form.tentativeJoiningDate && form.offerDate && form.tentativeJoiningDate < form.offerDate)
+    errors.tentativeJoiningDate = 'Must be on or after the offer date'
   if (form.acceptBy && form.offerDate && form.acceptBy < form.offerDate) errors.acceptBy = 'Must be on or after the offer date'
-  if (form.joiningDate && form.offerDate && form.joiningDate < form.offerDate)
-    errors.joiningDate = 'Must be on or after the offer date'
-  if (total.value <= 0) errors.salary = 'Add at least one salary component'
-  else if (form.salary.some((c) => !String(c.label).trim())) errors.salary = 'Every component needs a name'
   return !Object.values(errors).some(Boolean)
 }
 
-async function save(status) {
+async function save() {
+  formError.value = ''
   if (!validate()) {
     mobileTab.value = 'edit'
     toast('Please fix the highlighted fields', 'error')
     return
   }
+  if (salaryState.value === 'none') {
+    formError.value = 'This employee has no salary assigned yet. Assign one from their profile first.'
+    return
+  }
   saving.value = true
+  saveSignatory(signatory)
   try {
-    const payload = { ...form, status: status || form.status }
-    const saved = editId ? await updateOfferLetter(editId, payload) : await createOfferLetter(payload)
-    toast(editId ? 'Offer letter updated' : `Offer letter ${saved.refNo} created`)
+    const saved = editId ? await updateOfferLetter(editId, form) : await createOfferLetter(form.employeeId, form)
+    toast(editId ? 'Offer letter updated' : `Offer letter ${saved.refNo} issued`)
     router.push(`/employees/offer-letters/${saved.id}`)
   } catch (e) {
-    toast(e.message || 'Could not save the offer letter', 'error')
+    formError.value = e.message || 'Could not save the offer letter'
   } finally {
     saving.value = false
   }
 }
 
 onMounted(async () => {
-  // Employees are optional — candidates who haven't joined yet can be typed in manually.
-  listAllEmployees({ status: 'active' })
-    .then((list) => {
-      employees.value = list
-      if (!editId && route.query.employee) onEmployeePick(String(route.query.employee))
-    })
-    .catch((e) => (employeesError.value = e.message || 'Could not load employees'))
-
   if (editId) {
     try {
       const l = await getOfferLetter(editId)
-      refNo.value = l.refNo
-      Object.assign(form, blankOffer(), l)
-      gross.value = monthlyTotal(l.salary)
+      existing.value = l
+      Object.assign(form, {
+        employeeId: l.employeeId,
+        designation: l.designation,
+        department: l.department,
+        location: l.location,
+        offerDate: l.offerDate,
+        tentativeJoiningDate: l.tentativeJoiningDate,
+        acceptBy: l.acceptBy,
+        terms: l.terms,
+      })
+      employee.value = await getEmployee(l.employeeId).catch(() => null)
+      if (l.status === 'provisional') loadSalary(l.employeeId)
     } catch (e) {
-      loadError.value = e.status === 404 ? 'not-found' : e.message
+      loadError.value = e.status === 404 || e.status === 422 ? 'not-found' : e.message
     } finally {
       loading.value = false
     }
+    return
+  }
+
+  try {
+    employees.value = (await listAllEmployees({ status: 'active' })).sort((a, b) => a.fullName.localeCompare(b.fullName))
+    if (route.query.employee) onEmployeePick(String(route.query.employee))
+  } catch (e) {
+    employeesError.value = e.message || 'Could not load employees'
   }
 })
 </script>
@@ -144,14 +170,13 @@ onMounted(async () => {
     <div class="ui-page-head">
       <div>
         <h1>{{ editId ? 'Edit offer letter' : 'New offer letter' }}</h1>
-        <p class="ui-muted">{{ editId ? refNo : 'Fill in the details — the letter updates live on the right.' }}</p>
+        <p class="ui-muted">
+          {{ editId ? existing?.refNo : 'Fill in the details — the letter updates live on the right.' }}
+        </p>
       </div>
-      <div class="ui-actions">
-        <button class="btn btn-ghost" :disabled="saving || loading" @click="save()">
-          {{ editId ? 'Save changes' : 'Save as draft' }}
-        </button>
-        <button v-if="form.status === 'draft'" class="btn btn-primary" :disabled="saving || loading" @click="save('issued')">
-          {{ saving ? 'Saving…' : 'Save & issue' }}
+      <div v-if="!loadError && (!existing || existing.status === 'provisional')" class="ui-actions">
+        <button class="btn btn-primary" :disabled="saving || loading || salaryState === 'loading'" @click="save">
+          {{ saving ? 'Saving…' : editId ? 'Save changes' : 'Issue offer letter' }}
         </button>
       </div>
     </div>
@@ -161,6 +186,11 @@ onMounted(async () => {
       <strong>{{ loadError === 'not-found' ? 'Offer letter not found' : "Couldn't load this offer letter" }}</strong>
       <p v-if="loadError !== 'not-found'">{{ loadError }}</p>
     </div>
+    <div v-else-if="existing && existing.status !== 'provisional'" class="ui-card ui-empty">
+      <strong>This offer letter is {{ existing.status }}</strong>
+      <p>Only provisional letters can be edited.</p>
+      <RouterLink :to="`/employees/offer-letters/${editId}`" class="btn btn-ghost btn-sm cta">View letter</RouterLink>
+    </div>
 
     <template v-else>
       <div class="ui-tabs mobile-tabs" role="tablist">
@@ -169,25 +199,60 @@ onMounted(async () => {
       </div>
 
       <div class="editor">
-        <form class="pane form-pane" :class="{ hidden: mobileTab !== 'edit' }" novalidate @submit.prevent="save()">
+        <form class="pane form-pane" :class="{ hidden: mobileTab !== 'edit' }" novalidate @submit.prevent="save">
+          <p v-if="formError" class="ui-form-error">{{ formError }}</p>
+
           <div class="ui-card">
-            <div class="ui-card-head"><h2>Candidate</h2></div>
-            <div class="ui-form-grid two">
-              <label class="ui-field full">
-                <span class="ui-label">Existing employee</span>
-                <select class="ui-input" :value="form.employeeId" @change="onEmployeePick($event.target.value)">
-                  <option value="">New candidate (type details below)</option>
-                  <option v-for="o in employeeOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-                </select>
-                <small v-if="employeesError" class="ui-hint">Employee list unavailable: {{ employeesError }}</small>
-                <small v-else class="ui-hint">Picking an employee fills in their details. You can still edit them.</small>
-              </label>
-              <FormField v-model="form.salutation" label="Title" type="select" :options="['Mr.', 'Ms.', 'Mrs.', 'Dr.']" />
-              <FormField v-model="form.candidateName" label="Full name" required :error="errors.candidateName" />
-              <FormField v-model="form.phone" label="Phone" inputmode="tel" maxlength="13" />
-              <FormField v-model="form.email" label="Email" type="email" :error="errors.email" />
-              <FormField v-model="form.address" label="Address" type="textarea" span="full" hint="One line per row, or separate with commas." />
+            <div class="ui-card-head"><h2>Employee</h2></div>
+            <template v-if="editId">
+              <p class="emp-line">
+                <strong>{{ existing.candidateName }}</strong>
+                <span class="ui-muted"> · {{ existing.employeeCode }}</span>
+              </p>
+            </template>
+            <label v-else class="ui-field" :class="{ invalid: errors.employeeId }">
+              <span class="ui-label">Employee<em>*</em></span>
+              <select class="ui-input" :value="form.employeeId" @change="onEmployeePick($event.target.value)">
+                <option value="">Select an employee…</option>
+                <option v-for="o in employeeOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+              </select>
+              <small v-if="errors.employeeId" class="ui-error">{{ errors.employeeId }}</small>
+              <small v-else-if="employeesError" class="ui-hint">Employee list unavailable: {{ employeesError }}</small>
+              <small v-else class="ui-hint">
+                New candidate? <RouterLink to="/employees/new">Add them as an employee</RouterLink> and assign a salary
+                first.
+              </small>
+            </label>
+          </div>
+
+          <div class="ui-card">
+            <div class="ui-card-head">
+              <h2>Salary</h2>
+              <strong v-if="salary" class="total">{{ formatINR(salary.monthlyGross) }}<small> / month</small></strong>
             </div>
+            <p v-if="salaryState === 'idle'" class="ui-muted">Pick an employee to see the salary on the letter.</p>
+            <p v-else-if="salaryState === 'loading'" class="ui-muted">Loading salary…</p>
+            <p v-else-if="salaryState === 'error'" class="ui-form-error">Couldn't load the salary: {{ salaryError }}</p>
+            <div v-else-if="salaryState === 'none'" class="ui-form-error">
+              No salary structure is assigned to this employee.
+              <RouterLink :to="`/employees/${form.employeeId}`">Assign one on their profile</RouterLink>, then come back.
+            </div>
+            <template v-else>
+              <div class="sal">
+                <div v-for="c in salary.salary" :key="c.code" class="sal-row">
+                  <span>{{ c.label }}</span><b>{{ formatINR(c.amount) }}</b>
+                </div>
+                <div v-for="c in salary.deductions" :key="c.code" class="sal-row ded">
+                  <span>{{ c.label }}</span><b>−{{ formatINR(c.amount) }}</b>
+                </div>
+                <div class="sal-row total-row"><span>Net take-home</span><b>{{ formatINR(salary.monthlyNet) }}</b></div>
+              </div>
+              <p class="ui-hint">
+                From the "{{ salary.structureName }}" structure assigned to this employee. To change it,
+                <RouterLink :to="`/employees/${form.employeeId}`">update their salary</RouterLink> — the letter picks it up
+                when saved.
+              </p>
+            </template>
           </div>
 
           <div class="ui-card">
@@ -195,65 +260,51 @@ onMounted(async () => {
             <div class="ui-form-grid two">
               <label class="ui-field" :class="{ invalid: errors.designation }">
                 <span class="ui-label">Designation<em>*</em></span>
-                <input v-model="form.designation" class="ui-input" list="ol-designations" autocomplete="off" />
+                <input v-model="form.designation" class="ui-input" list="ol-designations" autocomplete="off" maxlength="100" />
                 <datalist id="ol-designations"><option v-for="d in DESIGNATIONS" :key="d" :value="d" /></datalist>
                 <small v-if="errors.designation" class="ui-error">{{ errors.designation }}</small>
               </label>
               <label class="ui-field">
                 <span class="ui-label">Department</span>
-                <input v-model="form.department" class="ui-input" list="ol-departments" autocomplete="off" />
+                <input v-model="form.department" class="ui-input" list="ol-departments" autocomplete="off" maxlength="100" />
                 <datalist id="ol-departments"><option v-for="d in DEPARTMENTS" :key="d" :value="d" /></datalist>
               </label>
-              <label class="ui-field">
+              <label class="ui-field full">
                 <span class="ui-label">Work location</span>
-                <input v-model="form.location" class="ui-input" list="ol-stores" autocomplete="off" placeholder="Store / city" />
+                <input
+                  v-model="form.location"
+                  class="ui-input"
+                  list="ol-stores"
+                  autocomplete="off"
+                  maxlength="150"
+                  placeholder="Store / city"
+                />
                 <datalist id="ol-stores"><option v-for="s in STORES" :key="s" :value="s" /></datalist>
               </label>
-              <FormField v-model="form.employmentType" label="Employment type" type="select" :options="EMPLOYMENT_TYPES" />
-              <FormField v-model="form.reportingTo" label="Reporting to" placeholder="e.g. Store Manager" />
-              <label class="ui-field">
-                <span class="ui-label">Shift / timings</span>
-                <input v-model="form.shift" class="ui-input" list="ol-shifts" autocomplete="off" placeholder="Rotational" />
-                <datalist id="ol-shifts"><option v-for="s in SHIFTS" :key="s" :value="s" /></datalist>
-              </label>
             </div>
           </div>
 
           <div class="ui-card">
-            <div class="ui-card-head"><h2>Dates &amp; terms</h2></div>
+            <div class="ui-card-head"><h2>Dates</h2></div>
             <div class="ui-form-grid two">
-              <FormField v-model="form.offerDate" label="Offer date" type="date" required :error="errors.offerDate" />
-              <FormField v-model="form.joiningDate" label="Date of joining" type="date" required :error="errors.joiningDate" />
+              <FormField
+                v-model="form.offerDate"
+                label="Offer date"
+                type="date"
+                :required="!editId"
+                :disabled="!!editId"
+                :error="errors.offerDate"
+                :hint="editId ? 'Set when the letter was issued' : ''"
+              />
+              <FormField
+                v-model="form.tentativeJoiningDate"
+                label="Tentative joining date"
+                type="date"
+                :error="errors.tentativeJoiningDate"
+                hint="Fixed later with Confirm joining"
+              />
               <FormField v-model="form.acceptBy" label="Accept by" type="date" :error="errors.acceptBy" />
-              <FormField v-model="form.probationMonths" label="Probation (months)" type="number" inputmode="numeric" hint="0 for none" />
-              <FormField v-model="form.noticeDays" label="Notice period (days)" type="number" inputmode="numeric" />
             </div>
-          </div>
-
-          <div class="ui-card">
-            <div class="ui-card-head">
-              <h2>Salary (monthly)</h2>
-              <strong class="total">{{ formatINR(total) }}<small> / month</small></strong>
-            </div>
-            <div class="split">
-              <label class="ui-field">
-                <span class="ui-label">Gross per month (₹)</span>
-                <input v-model.number="gross" class="ui-input" type="number" inputmode="numeric" min="0" />
-              </label>
-              <button type="button" class="btn btn-ghost btn-sm" @click="resplit">Auto-split</button>
-            </div>
-            <p class="ui-hint split-hint">Auto-split: Basic 50%, HRA 20%, Conveyance up to ₹1,600, rest as special allowance.</p>
-
-            <div class="components">
-              <div v-for="(c, i) in form.salary" :key="i" class="comp">
-                <input v-model="c.label" class="ui-input" placeholder="Component name" aria-label="Component name" />
-                <input v-model.number="c.amount" class="ui-input amt" type="number" inputmode="numeric" min="0" aria-label="Monthly amount" />
-                <button type="button" class="icon-btn" aria-label="Remove component" @click="removeComponent(i)">×</button>
-              </div>
-            </div>
-            <button type="button" class="btn btn-ghost btn-sm" @click="addComponent">+ Add component</button>
-            <p v-if="errors.salary" class="ui-error salary-err">{{ errors.salary }}</p>
-            <p class="ui-hint">Annual gross: {{ formatINR(total * 12) }}</p>
           </div>
 
           <div class="ui-card">
@@ -270,9 +321,10 @@ onMounted(async () => {
           <div class="ui-card">
             <div class="ui-card-head"><h2>Signed by</h2></div>
             <div class="ui-form-grid two">
-              <FormField v-model="form.signatoryName" label="Signatory name" required :error="errors.signatoryName" />
-              <FormField v-model="form.signatoryTitle" label="Signatory title" placeholder="Proprietor / HR Manager" />
+              <FormField v-model="signatory.name" label="Signatory name" placeholder="Authorised signatory" />
+              <FormField v-model="signatory.title" label="Signatory title" placeholder="Proprietor / HR Manager" />
             </div>
+            <p class="ui-hint">Remembered in this browser and used on every offer letter.</p>
           </div>
         </form>
 
@@ -337,54 +389,53 @@ onMounted(async () => {
   font-size: 12px;
 }
 
-.split {
-  display: flex;
-  gap: 10px;
-  align-items: flex-end;
+.emp-line {
+  margin: 0;
 }
 
-.split .ui-field {
-  flex: 1;
-}
-
-.split-hint {
-  display: block;
-  margin: 6px 0 14px;
-}
-
-.components {
+.sal {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
   margin-bottom: 10px;
 }
 
-.comp {
-  display: grid;
-  grid-template-columns: 1fr 120px 36px;
-  gap: 8px;
+.sal-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  font-size: 14px;
+  border-bottom: 1px solid var(--border);
 }
 
-.amt {
-  text-align: right;
+.sal-row:last-child {
+  border-bottom: none;
 }
 
-.icon-btn {
-  border: 1px solid var(--border);
-  background: var(--bg-soft);
-  color: var(--muted);
-  border-radius: 10px;
-  font-size: 18px;
-  cursor: pointer;
+.sal-row b {
+  color: var(--text-h);
+  font-variant-numeric: tabular-nums;
 }
 
-.icon-btn:hover {
+.sal-row.ded b {
   color: var(--danger);
-  border-color: var(--danger);
 }
 
-.salary-err {
-  margin-top: 8px;
+.total-row {
+  background: var(--bg-soft);
+  font-weight: 700;
+}
+
+.cta {
+  margin-top: 14px;
+  display: inline-flex;
+}
+
+.form-pane > .ui-form-error {
+  margin-bottom: 16px;
 }
 
 .terms {

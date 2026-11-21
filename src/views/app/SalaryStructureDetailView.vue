@@ -1,9 +1,10 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   CALCULATION_TYPES,
   COMPONENT_TYPES,
+  deleteStructure,
   describeComponent,
   getStructure,
   labelOf,
@@ -14,8 +15,10 @@ import {
 } from '../../services/salaryStructureService'
 import { formatINR } from '../../utils/format'
 import { formatDate } from '../../utils/date'
+import { toast } from '../../stores/toast'
 
 const route = useRoute()
+const router = useRouter()
 const s = ref(null)
 const loading = ref(true)
 const error = ref('')
@@ -23,6 +26,26 @@ const error = ref('')
 const sampleGross = ref(SAMPLE_GROSS)
 const usesGross = computed(() => !!s.value && needsGross(s.value.components))
 const preview = computed(() => (s.value ? previewStructure(s.value.components, sampleGross.value) : null))
+
+const deleting = ref(false)
+
+async function remove() {
+  if (!confirm(`Delete “${s.value.name}”? This can't be undone.`)) return
+  deleting.value = true
+  try {
+    await deleteStructure(s.value.id)
+    toast(`${s.value.name} deleted`)
+    router.push('/payroll/structures')
+  } catch (e) {
+    // 422 when the structure has been assigned to someone — it can only be deactivated.
+    toast(
+      e.status === 422 ? `${e.message || "Can't delete a structure that's been assigned"}. Mark it inactive instead.` : e.message,
+      'error',
+    )
+  } finally {
+    deleting.value = false
+  }
+}
 
 onMounted(async () => {
   try {
@@ -61,6 +84,10 @@ onMounted(async () => {
             <input v-model.number="sampleGross" class="ui-input" type="number" min="0" step="500" aria-label="Sample monthly gross" />
           </label>
           <RouterLink :to="`/payroll/structures/new?from=${s.id}`" class="btn btn-ghost">Duplicate</RouterLink>
+          <button class="btn btn-ghost danger" :disabled="deleting" @click="remove">
+            {{ deleting ? 'Deleting…' : 'Delete' }}
+          </button>
+          <RouterLink :to="`/payroll/structures/${s.id}/edit`" class="btn btn-primary">Edit</RouterLink>
         </div>
       </div>
 
@@ -122,8 +149,8 @@ onMounted(async () => {
       </div>
 
       <p class="ui-hint note">
-        The API doesn't support editing structures yet. To change one, duplicate it, adjust the copy, and mark the old one
-        inactive once editing is available.
+        Edits apply to future payroll runs; slips already generated keep their old amounts. Structures that have been
+        assigned to an employee can't be deleted — edit them and untick “Active” instead.
       </p>
     </template>
   </div>
@@ -188,6 +215,10 @@ onMounted(async () => {
 .amount small {
   display: block;
   font-weight: 400;
+}
+
+.danger {
+  color: var(--danger);
 }
 
 .note {

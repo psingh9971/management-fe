@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
-import { getEmployee } from '../../services/employeeService'
+import { useRoute, useRouter } from 'vue-router'
+import { deleteEmployee, getEmployee } from '../../services/employeeService'
 import { assignEmployeePolicy, describeRule, getEmployeePolicy, listPolicies } from '../../services/weekOffService'
 import { toast } from '../../stores/toast'
 import EmployeeSalaryCard from '../../components/app/payroll/EmployeeSalaryCard.vue'
@@ -11,7 +11,24 @@ import { formatAadhaar, formatINR, initials, maskAadhaar, maskAccount } from '..
 import { currentMonth, formatDate, formatMonth } from '../../utils/date'
 
 const route = useRoute()
+const router = useRouter()
 const id = route.params.id
+
+const deleting = ref(false)
+async function remove() {
+  const e = emp.value
+  if (!confirm(`Delete ${e.fullName} (${e.code})? They'll be removed from every list and deactivated. Their attendance, leave and payroll history is kept.`)) return
+  deleting.value = true
+  try {
+    await deleteEmployee(e.id)
+    toast(`${e.fullName} deleted`)
+    router.push('/employees')
+  } catch (err) {
+    toast(err.message || 'Could not delete employee', 'error')
+  } finally {
+    deleting.value = false
+  }
+}
 
 const emp = ref(null)
 const month = ref({ P: 0, HD: 0, A: 0, L: 0, WO: 0 })
@@ -173,6 +190,10 @@ onMounted(async () => {
           <RouterLink :to="`/employees/offer-letters/new?employee=${emp.id}`" class="btn btn-ghost btn-sm">
             Generate offer letter
           </RouterLink>
+          <RouterLink :to="`/employees/${emp.id}/edit`" class="btn btn-primary btn-sm">Edit</RouterLink>
+          <button class="btn btn-ghost btn-sm danger" :disabled="deleting" @click="remove">
+            {{ deleting ? 'Deleting…' : 'Delete' }}
+          </button>
         </div>
       </div>
 
@@ -244,6 +265,10 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.danger {
+  color: var(--danger);
+}
+
 .offer-btn {
   margin-left: auto;
   align-self: flex-start;
