@@ -7,7 +7,7 @@ import { formatDate } from '../../../utils/date'
 // A4 offer letter with JP Enterprises letterhead and Zepto partner branding.
 // Page 1: the letter. Page 2: Annexure (salary + terms) and acceptance.
 // `letter` is the UI shape from offerLetterService.toOfferLetter(), plus optional employee contact
-// fields (salutation, address, phone, email) and the signatory ({ signatoryName, signatoryTitle }).
+// fields (salutation, address, phone, email) and the signatory ({ signatoryName, signatoryTitle, signatorySignature }).
 const props = defineProps({ letter: { type: Object, required: true } })
 
 // Drop an official Zepto logo at public/zepto-logo.png to replace the text wordmark.
@@ -17,12 +17,10 @@ const zeptoLogoFailed = ref(false)
 const l = computed(() => props.letter)
 const sumOf = (list) => (list || []).reduce((s, c) => s + (Number(c.amount) || 0), 0)
 const monthly = computed(() => l.value.monthlyGross || sumOf(l.value.salary))
-const annual = computed(() => l.value.annualGross || monthly.value * 12)
 const deductions = computed(() => l.value.deductions || [])
 const monthlyDeductions = computed(() => l.value.monthlyDeductions ?? sumOf(deductions.value))
 const net = computed(() => l.value.monthlyNet || monthly.value - monthlyDeductions.value)
 const tentative = computed(() => l.value.joiningTentative !== false)
-const annualOf = (c) => c.annual ?? (Number(c.amount) || 0) * 12
 const firstName = computed(() => (l.value.candidateName || '').trim().split(' ')[0] || 'Candidate')
 const terms = computed(() =>
   (l.value.terms || '')
@@ -45,7 +43,7 @@ const keyTerms = computed(() =>
     ['Department', l.value.department],
     ['Work location', l.value.location],
     ['Date of joining', l.value.joiningDate ? `${d(l.value.joiningDate)}${tentative.value ? ' (tentative)' : ''}` : d('')],
-    ['Gross salary', `${formatINR(monthly.value)} per month (${formatINR(annual.value)} per annum)`],
+    ['Gross salary', `${formatINR(monthly.value)} per month`],
     ['Net take-home', monthlyDeductions.value ? `${formatINR(net.value)} per month (after deductions)` : ''],
   ].filter(([, v]) => v),
 )
@@ -121,7 +119,9 @@ const keyTerms = computed(() =>
 
         <div class="sign">
           <div>For <strong>JP Enterprises</strong></div>
-          <div class="sign-space" />
+          <div class="sign-space">
+            <img v-if="l.signatorySignature" :src="l.signatorySignature" alt="Signature" class="sign-img" />
+          </div>
           <div class="sign-name">{{ blank(l.signatoryName, 'Authorised signatory') }}</div>
           <div class="sign-title">{{ l.signatoryTitle }}</div>
         </div>
@@ -161,24 +161,21 @@ const keyTerms = computed(() =>
             <tr>
               <th>Component</th>
               <th class="num">Monthly (₹)</th>
-              <th class="num">Annual (₹)</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="(c, i) in l.salary" :key="i">
               <td>{{ c.label }}</td>
               <td class="num">{{ formatINR(c.amount).replace('₹', '') }}</td>
-              <td class="num">{{ formatINR(annualOf(c)).replace('₹', '') }}</td>
             </tr>
             <tr v-if="!l.salary?.length">
-              <td colspan="3" class="muted-cell">Salary is taken from the employee's assigned salary structure.</td>
+              <td colspan="2" class="muted-cell">Salary is taken from the employee's assigned salary structure.</td>
             </tr>
           </tbody>
           <tfoot>
             <tr>
               <td>Gross salary</td>
               <td class="num">{{ formatINR(monthly) }}</td>
-              <td class="num">{{ formatINR(annual) }}</td>
             </tr>
           </tfoot>
         </table>
@@ -188,25 +185,22 @@ const keyTerms = computed(() =>
             <tr>
               <th>Deductions</th>
               <th class="num">Monthly (₹)</th>
-              <th class="num">Annual (₹)</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="(c, i) in deductions" :key="i">
               <td>{{ c.label }}</td>
               <td class="num">{{ formatINR(c.amount).replace('₹', '') }}</td>
-              <td class="num">{{ formatINR(annualOf(c)).replace('₹', '') }}</td>
             </tr>
           </tbody>
           <tfoot>
             <tr>
               <td>Net take-home</td>
               <td class="num">{{ formatINR(net) }}</td>
-              <td class="num">{{ formatINR(net * 12) }}</td>
             </tr>
           </tfoot>
         </table>
-        <p class="words">Annual gross in words: <strong>Rupees {{ amountInWords(annual) }} only</strong></p>
+        <p class="words">Monthly gross in words: <strong>Rupees {{ amountInWords(monthly) }} only</strong></p>
 
         <h3>Terms &amp; conditions</h3>
         <ol class="terms">
@@ -438,7 +432,15 @@ const keyTerms = computed(() =>
 }
 
 .sign-space {
-  height: 12mm;
+  height: 16mm;
+  display: flex;
+  align-items: flex-end;
+}
+
+.sign-img {
+  max-height: 15mm;
+  max-width: 55mm;
+  margin-bottom: -1mm; /* let the ink touch the line, like a real signature */
 }
 
 .sign-name {

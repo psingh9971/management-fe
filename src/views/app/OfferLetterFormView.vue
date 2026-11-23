@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import FormField from '../../components/app/FormField.vue'
 import DocPreview from '../../components/app/docs/DocPreview.vue'
 import OfferLetterDocument from '../../components/app/offer/OfferLetterDocument.vue'
+import SignaturePad from '../../components/app/offer/SignaturePad.vue'
 import {
   blankOffer,
   createOfferLetter,
@@ -324,7 +325,14 @@ onMounted(async () => {
               <FormField v-model="signatory.name" label="Signatory name" placeholder="Authorised signatory" />
               <FormField v-model="signatory.title" label="Signatory title" placeholder="Proprietor / HR Manager" />
             </div>
-            <p class="ui-hint">Remembered in this browser and used on every offer letter.</p>
+            <div class="ui-field sig-field">
+              <span class="ui-label">Signature</span>
+              <SignaturePad v-model="signatory.signature" />
+            </div>
+            <p class="ui-hint">
+              Draw with a mouse, finger or stylus, or upload a photo of a signature on white paper. Remembered in this
+              browser and printed on every offer letter.
+            </p>
           </div>
         </form>
 
@@ -436,6 +444,10 @@ onMounted(async () => {
 
 .form-pane > .ui-form-error {
   margin-bottom: 16px;
+}
+
+.sig-field {
+  margin-top: 14px;
 }
 
 .terms {

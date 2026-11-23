@@ -38,19 +38,22 @@ export const DEFAULT_TERMS = [
 // ---------- signatory (an org-wide setting, not stored on the letter by the API) ----------
 const SIGN_KEY = 'jpz-offer-signatory-v1'
 
+// `signature` is a transparent PNG data URL (drawn or uploaded in SignaturePad.vue), or ''.
 export function getSignatory() {
+  const defaults = { name: '', title: 'Proprietor', signature: '' }
   try {
-    return { name: '', title: 'Proprietor', ...JSON.parse(localStorage.getItem(SIGN_KEY) || '{}') }
+    return { ...defaults, ...JSON.parse(localStorage.getItem(SIGN_KEY) || '{}') }
   } catch {
-    return { name: '', title: 'Proprietor' }
+    return defaults
   }
 }
 
 export function saveSignatory(s) {
+  const signature = typeof s.signature === 'string' && s.signature.startsWith('data:image/') ? s.signature : ''
   try {
-    localStorage.setItem(SIGN_KEY, JSON.stringify({ name: s.name || '', title: s.title || '' }))
+    localStorage.setItem(SIGN_KEY, JSON.stringify({ name: s.name || '', title: s.title || '', signature }))
   } catch {
-    /* storage unavailable */
+    /* storage unavailable or full */
   }
 }
 
@@ -208,5 +211,6 @@ export function forDocument(letter, employee = null, signatory = getSignatory())
     email: e.email || '',
     signatoryName: signatory.name,
     signatoryTitle: signatory.title,
+    signatorySignature: signatory.signature || '',
   }
 }
