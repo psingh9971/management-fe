@@ -1,7 +1,8 @@
 <script setup>
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '../stores/auth'
+import { fetchCurrentTenant } from '../services/authService'
 
 const router = useRouter()
 const route = useRoute()
@@ -13,15 +14,38 @@ const showPassword = ref(false)
 const loading = ref(false)
 const error = ref('')
 
+const tenant = ref(null)
+const tenantLoading = ref(true)
+const tenantError = ref('')
+
+async function loadTenant() {
+  tenantLoading.value = true
+  tenantError.value = ''
+  try {
+    tenant.value = await fetchCurrentTenant()
+  } catch (e) {
+    tenant.value = null
+    tenantError.value = e.message || 'Could not identify your organisation.'
+  } finally {
+    tenantLoading.value = false
+  }
+}
+
+onMounted(loadTenant)
+
 async function submit() {
   error.value = ''
+  if (!tenant.value?.id) {
+    error.value = 'Organisation could not be identified. Please reload and try again.'
+    return
+  }
   if (!username.value.trim() || !password.value) {
     error.value = 'Please enter your username and password.'
     return
   }
   loading.value = true
   try {
-    await auth.login(username.value, password.value)
+    await auth.login(tenant.value.id, username.value, password.value)
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard'
     router.replace(redirect.startsWith('/') ? redirect : '/dashboard')
   } catch (e) {
@@ -38,6 +62,12 @@ async function submit() {
       <form class="card" novalidate @submit.prevent="submit">
         <span class="eyebrow">Partner / Team Login</span>
         <h1>Welcome back</h1>
+        <p v-if="tenantLoading" class="tenant muted">Loading organisation…</p>
+        <p v-else-if="tenant" class="tenant">{{ tenant.name }}</p>
+        <p v-else class="error" role="alert">
+          {{ tenantError }}
+          <button type="button" class="retry" @click="loadTenant">Retry</button>
+        </p>
         <p class="muted">Sign in to manage stores, inventory and teams.</p>
 
         <p v-if="route.query.expired" class="info" role="status">Your session has ended. Please sign in again.</p>
@@ -64,7 +94,7 @@ async function submit() {
 
         <p v-if="error" class="error" role="alert">{{ error }}</p>
 
-        <button class="btn btn-primary submit" type="submit" :disabled="loading">
+        <button class="btn btn-primary submit" type="submit" :disabled="loading || tenantLoading || !tenant">
           {{ loading ? 'Signing in…' : 'Sign in' }}
         </button>
       </form>
@@ -105,6 +135,29 @@ async function submit() {
 h1 {
   font-size: 28px;
   margin-top: 4px;
+}
+
+.tenant {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-top: -4px;
+}
+
+.tenant.muted {
+  color: inherit;
+  font-weight: 400;
+}
+
+.retry {
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0 0 0 6px;
 }
 
 .muted {

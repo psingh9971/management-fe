@@ -1,20 +1,19 @@
 import vue from '@vitejs/plugin-vue'
-import { defineConfig, loadEnv } from 'vite'
+import { defineConfig } from 'vite'
 
 // https://vite.dev/config/
-export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), '')
-  return {
-    plugins: [vue()],
-    server: {
-      // The app calls /api/...; in development this forwards to the FastAPI backend as-is
-      // (the backend's routes are mounted under /api), so no CORS setup is needed on the server.
-      proxy: {
-        '/api': {
-          target: env.VITE_API_PROXY_TARGET || 'http://localhost:8000',
-          changeOrigin: true,
-        },
+// No env config: the API is always <current host>/api, and the tenant is resolved from the host.
+export default defineConfig({
+  plugins: [vue()],
+  server: {
+    // Development only: forward /api/... to the local FastAPI backend.
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8000',
+        // Keep the browser's Host header (e.g. demo.localhost:5173) so the backend can
+        // resolve the tenant from the subdomain.
+        changeOrigin: false,
       },
     },
-  }
+  },
 })

@@ -1,10 +1,17 @@
 // Auth API
-//   POST /auth/login  { username, password } -> { access_token, token_type, expires_in }
+//   GET  /tenants/current (public)         -> { id, name, slug, domain }
+//   POST /auth/login  { tenant_id, username, password } -> { access_token, token_type, expires_in }
 //   GET  /auth/me     (Bearer token)         -> UserOut
 import { http } from './http'
 
-export function login(username, password) {
-  return http.post('/auth/login', { username, password }, { auth: false })
+// The backend resolves the tenant from the request's host (subdomain) so the login page
+// can show its name and send its id with the login request.
+export function fetchCurrentTenant() {
+  return http.get('/tenants/current', { auth: false })
+}
+
+export function login(tenantId, username, password) {
+  return http.post('/auth/login', { tenant_id: tenantId, username, password }, { auth: false })
 }
 
 export function fetchMe() {

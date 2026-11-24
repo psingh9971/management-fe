@@ -67,8 +67,8 @@ export function useAuth() {
     user: computed(() => state.user),
     isLoggedIn: computed(() => !!state.token && state.expiresAt > Date.now()),
 
-    async login(username, password) {
-      const res = await authService.login(username.trim(), password)
+    async login(tenantId, username, password) {
+      const res = await authService.login(tenantId, username.trim(), password)
       state.token = res.access_token
       state.expiresAt = Date.now() + (Number(res.expires_in) || 3600) * 1000
       try {

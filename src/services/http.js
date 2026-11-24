@@ -1,7 +1,8 @@
 // Small fetch wrapper for the backend API.
-// All requests go to `${API_BASE}${path}`. API_BASE comes from VITE_API_BASE_URL in .env
-// (https://jpenterprises.scholarix.co.uk/api); the FastAPI routes start with /api.
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '')
+// All requests go to `${API_BASE}${path}`. The API is served from the same host the app is
+// opened on (e.g. https://demo.example.com/api), so the base is the current origin + /api.
+// In development the Vite proxy forwards /api to the backend (see vite.config.js).
+const API_BASE = `${window.location.origin}/api`
 
 let tokenGetter = () => null
 let unauthorizedHandler = () => {}
